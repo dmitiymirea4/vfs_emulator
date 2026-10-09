@@ -1,0 +1,8 @@
+<vfs name="MyVirtualDisk">
+    <dir name="home">
+        <dir name="user">
+            <file name="notes.txt">SGVsbG8gTWlyZWEhClRoaXMgaXMgdGFpbCB0ZXN0LgoxCjIKMwo0CjUKNgo3CjgKOWxhc3QgbGluZQ==</file>
+        </dir>
+    </dir>
+    <dir name="bin"/>
+</vfs>

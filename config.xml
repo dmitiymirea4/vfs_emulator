@@ -1,0 +1,4 @@
+<config>
+    <vfs_path>vfs.xml</vfs_path>
+    <script_path>script.sh</script_path>
+</config>

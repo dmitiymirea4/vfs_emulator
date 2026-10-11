@@ -1,0 +1,1 @@
+  add src/main.pygit commit -m "feat: implement stage 4 - basic commands support (ls, cd, tail, who, clear)"

@@ -40,6 +40,8 @@ class VFSEmulator:
 
     def get_node_by_path(self, path_str):
         """Вспомогательный метод навигации по дереву VFS"""
+        if isinstance(path_str, list):
+            path_str = path_str[0] if path_str else ""
         if not path_str:
             return self.current_node
         
@@ -104,7 +106,7 @@ class VFSEmulator:
         return f"{self.username}\n"
 
     def cmd_ls(self, args):
-        target = self.current_node if not args else self.get_node_by_path(args[0])
+        target = self.current_node if not args else self.get_node_by_path(args)
         if target is None:
             return "ls: каталог не найден\n"
         
@@ -118,24 +120,25 @@ class VFSEmulator:
     def cmd_cd(self, args):
         if not args:
             return ""
-        target = self.get_node_by_path(args[0])
+        target = self.get_node_by_path(args)
         if target is None or target.tag != "dir":
-            return f"cd: нет такого каталога: {args[0]}\n"
+            path_name = args[0] if isinstance(args, list) else args
+            return f"cd: нет такого каталога: {path_name}\n"
         self.current_node = target
         return ""
 
     def cmd_tail(self, args):
         if not args:
             return "tail: пропущен файл\n"
+        filename = args[0] if isinstance(args, list) else args
         
-        filename = args[0]
         file_node = None
         for child in self.current_node.findall("file"):
             if child.get("name") == filename:
                 file_node = child
                 break
                 
-        if not file_node:
+        if file_node is None:
             return f"tail: {filename}: файл не найден\n"
         
         try:
@@ -147,15 +150,17 @@ class VFSEmulator:
             return "tail: ошибка чтения файла\n"
 
     def cmd_cp(self, args):
-        if len(args) < 2:
+        if not args or len(args) < 2:
             return "cp: пропущены аргументы\n"
-        src, dest = args[0], args[1]
+        src = args[0] if isinstance(args, list) else args
+        dest = args[1] if isinstance(args, list) else args
+        
         src_node = None
         for child in self.current_node.findall("file"):
             if child.get("name") == src:
                 src_node = child
                 break
-        if not src_node:
+        if src_node is None:
             return f"cp: {src}: файл не найден\n"
         
         new_node = ET.Element("file", name=dest)
@@ -166,7 +171,8 @@ class VFSEmulator:
     def cmd_rm(self, args):
         if not args:
             return "rm: пропущен аргумент\n"
-        target_name = args[0]
+        target_name = args[0] if isinstance(args, list) else args
+        
         for child in list(self.current_node):
             if child.get("name") == target_name:
                 self.current_node.remove(child)
@@ -174,10 +180,10 @@ class VFSEmulator:
         return f"rm: {target_name}: файл или каталог не найден\n"
 
     def cmd_vfs_load(self, args):
-        """Этап 5: Новая команда динамической загрузки VFS с диска"""
         if not args:
             return "vfs-load: пропущен путь\n"
-        self.load_vfs(args[0])
+        path = args[0] if isinstance(args, list) else args
+        self.load_vfs(path)
         return f"Успешно загружена новая VFS: {self.vfs_name}\n"
 
 

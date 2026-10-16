@@ -14,19 +14,19 @@ class VFSEmulator:
         self.vfs_name = "VirtualFS"
         self.root = None
         self.current_node = None
-        self.current_path = ["root"]
         self.username = os.getlogin() if hasattr(os, 'getlogin') else "user"
         
         self.load_vfs(vfs_path)
 
     def load_vfs(self, path):
-        """Этап 3 & Этап 5: Загрузка VFS из XML в память"""
+        """Этап 3 & Этап 5: Загрузка VFS из XML в оперативную память"""
         try:
             tree = ET.parse(path)
             self.root = tree.getroot()
             self.vfs_name = self.root.get("name", "VirtualFS")
-            self.current_node = self.root.find("dir")
-            self.current_path = ["root"]
+            # Корневой тег <vfs>, внутри него ищем первый <dir name="root"> или берем сам корень
+            root_dir = self.root.find("dir")
+            self.current_node = root_dir if root_dir is not None else self.root
         except Exception as e:
             print(f"Ошибка загрузки VFS: {e}")
             sys.exit(1)
@@ -39,9 +39,7 @@ class VFSEmulator:
         return re.sub(r'\$(\w+)', replacer, text)
 
     def get_node_by_path(self, path_str):
-        """Вспомогательный метод навигации по дереву VFS"""
-        if isinstance(path_str, list):
-            path_str = path_str[0] if path_str else ""
+        """Вспомогательный метод навигации по виртуальному дереву"""
         if not path_str:
             return self.current_node
         
@@ -49,7 +47,7 @@ class VFSEmulator:
         start_node = self.current_node
         
         if path_str.startswith("/"):
-            start_node = self.root.find("dir")
+            start_node = self.root.find("dir") or self.root
             parts = [p for p in parts if p and p != "root"]
 
         node = start_node
@@ -70,7 +68,7 @@ class VFSEmulator:
         return node
 
     def execute_command(self, command_line):
-        """Парсер команд REPL с поддержкой раскрытия переменных"""
+        """Парсер команд REPL: всегда передает в методы чистый список строк"""
         command_line = self.resolve_env_vars(command_line).strip()
         if not command_line:
             return ""
@@ -106,7 +104,7 @@ class VFSEmulator:
         return f"{self.username}\n"
 
     def cmd_ls(self, args):
-        target = self.current_node if not args else self.get_node_by_path(args)
+        target = self.current_node if not args else self.get_node_by_path(args[0])
         if target is None:
             return "ls: каталог не найден\n"
         
@@ -120,17 +118,16 @@ class VFSEmulator:
     def cmd_cd(self, args):
         if not args:
             return ""
-        target = self.get_node_by_path(args)
+        target = self.get_node_by_path(args[0])
         if target is None or target.tag != "dir":
-            path_name = args[0] if isinstance(args, list) else args
-            return f"cd: нет такого каталога: {path_name}\n"
+            return f"cd: нет такого каталога: {args[0]}\n"
         self.current_node = target
         return ""
 
     def cmd_tail(self, args):
         if not args:
             return "tail: пропущен файл\n"
-        filename = args[0] if isinstance(args, list) else args
+        filename = args[0]
         
         file_node = None
         for child in self.current_node.findall("file"):
@@ -144,16 +141,14 @@ class VFSEmulator:
         try:
             content = base64.b64decode(file_node.text or "").decode('utf-8')
             lines = content.splitlines()
-            last_lines = lines[-10:]
-            return "\n".join(last_lines) + "\n"
+            return "\n".join(lines[-10:]) + "\n"
         except Exception:
             return "tail: ошибка чтения файла\n"
 
     def cmd_cp(self, args):
-        if not args or len(args) < 2:
+        if len(args) < 2:
             return "cp: пропущены аргументы\n"
-        src = args[0] if isinstance(args, list) else args
-        dest = args[1] if isinstance(args, list) else args
+        src, dest = args[0], args[1]
         
         src_node = None
         for child in self.current_node.findall("file"):
@@ -171,8 +166,7 @@ class VFSEmulator:
     def cmd_rm(self, args):
         if not args:
             return "rm: пропущен аргумент\n"
-        target_name = args[0] if isinstance(args, list) else args
-        
+        target_name = args[0]
         for child in list(self.current_node):
             if child.get("name") == target_name:
                 self.current_node.remove(child)
@@ -182,37 +176,62 @@ class VFSEmulator:
     def cmd_vfs_load(self, args):
         if not args:
             return "vfs-load: пропущен путь\n"
-        path = args[0] if isinstance(args, list) else args
-        self.load_vfs(path)
+        self.load_vfs(args[0])
         return f"Успешно загружена новая VFS: {self.vfs_name}\n"
-
-
 class EmulatorGUI:
+    """Этап 1: Графический интерфейс REPL с полем ввода снизу"""
     def __init__(self, emulator):
         self.emu = emulator
         self.root = tk.Tk()
         self.root.title(self.emu.vfs_name)
         self.root.geometry("700x450")
         
-        self.terminal = scrolledtext.ScrolledText(self.root, bg="black", fg="white", font=("Courier", 12))
+        # Область истории терминала (вывод результатов)
+        self.terminal = scrolledtext.ScrolledText(
+            self.root, bg="black", fg="white", font=("Courier", 12), state=tk.DISABLED
+        )
         self.terminal.pack(fill=tk.BOTH, expand=True)
-        self.terminal.bind("<Return>", self.handle_input)
         
-        self.display_prompt()
+        # Контейнер для нижней строки ввода
+        input_frame = tk.Frame(self.root, bg="black")
+        input_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
+        # Метка приглашения пользователя (Prompt)
+        self.prompt_label = tk.Label(
+            input_frame, text=f"{self.emu.username}@vfs:~$ ", bg="black", fg="cyan", font=("Courier", 12)
+        )
+        self.prompt_label.pack(side=tk.LEFT)
+        
+        # Интерактивная строка ввода СНИЗУ
+        self.entry = tk.Entry(
+            input_frame, bg="black", fg="white", insertbackground="white", 
+            font=("Courier", 12), bd=0, highlightthickness=0
+        )
+        self.entry.pack(fill=tk.X, side=tk.LEFT, expand=True)
+        self.entry.bind("<Return>", self.handle_input)
+        self.entry.focus_set()
+        
+        # Автоматический запуск стартового скрипта из Этапа 2
         if self.emu.script_path:
             self.root.after(100, self.run_startup_script)
 
-    def display_prompt(self):
-        prompt = f"{self.emu.username}@vfs:~$ "
-        self.terminal.insert(tk.END, prompt)
-        self.terminal.mark_set("input_start", "insert-1c")
+    def write_to_terminal(self, text):
+        """Вспомогательный метод безопасного вывода текста в историю"""
+        self.terminal.config(state=tk.NORMAL)
+        self.terminal.insert(tk.END, text)
+        self.terminal.config(state=tk.DISABLED)
         self.terminal.see(tk.END)
 
     def handle_input(self, event):
-        input_start = self.terminal.index("input_start")
-        cmd_line = self.terminal.get(input_start, "end-1c").strip()
-        self.terminal.insert(tk.END, "\n")
+        """Обработка ввода пользователя по нажатию Enter"""
+        cmd_line = self.entry.get().strip()
+        self.entry.delete(0, tk.END)
+        
+        if not cmd_line:
+            return "break"
+            
+        # Логируем введенную команду в историю
+        self.write_to_terminal(f"{self.emu.username}@vfs:~$ {cmd_line}\n")
         
         if cmd_line == "exit":
             self.root.quit()
@@ -221,33 +240,38 @@ class EmulatorGUI:
         output = self.emu.execute_command(cmd_line)
         
         if output == "CLEAR_SIGNAL":
+            self.terminal.config(state=tk.NORMAL)
             self.terminal.delete("1.0", tk.END)
+            self.terminal.config(state=tk.DISABLED)
         else:
-            self.terminal.insert(tk.END, output)
+            self.write_to_terminal(output)
             
-        self.display_prompt()
         return "break"
 
     def run_startup_script(self):
+        """Этап 2, Требование 5: Логика построчного выполнения стартового скрипта"""
         if not os.path.exists(self.emu.script_path):
             return
-        with open(self.emu.script_path, "r") as f:
+        with open(self.emu.script_path, "r", encoding="utf-8") as f:
             for line in f:
                 cmd = line.strip()
                 if not cmd or cmd.startswith("#"):
                     continue
-                self.terminal.insert(tk.END, cmd + "\n")
+                self.write_to_terminal(f"{self.emu.username}@vfs:~$ {cmd}\n")
                 output = self.emu.execute_command(cmd)
+                
+                # Если команда завершилась с ошибкой, немедленно прерываемся по ТЗ
                 if "команда не найдена" in output or "ошибка" in output or "не найден" in output:
-                    self.terminal.insert(tk.END, output)
-                    self.terminal.insert(tk.END, "⚠️ Скрипт остановлен из-за ошибки.\n")
+                    self.write_to_terminal(output)
+                    self.write_to_terminal("Скрипт остановлен из-за ошибки.\n")
                     break
+                
                 if output != "CLEAR_SIGNAL":
-                    self.terminal.insert(tk.END, output)
-        self.display_prompt()
+                    self.write_to_terminal(output)
 
 
 def parse_args():
+    """Этап 2: Парсинг аргументов с приоритетом перед XML-конфигом"""
     parser = argparse.ArgumentParser(description="VFS Emulator")
     parser.add_argument("--vfs", help="Путь к файлу VFS XML")
     parser.add_argument("--script", help="Путь к стартовому скрипту")
@@ -256,6 +280,7 @@ def parse_args():
 
     vfs_path, script_path = None, None
     config_file = args.config or "config.xml"
+    
     if os.path.exists(config_file):
         try:
             tree = ET.parse(config_file)
@@ -267,6 +292,7 @@ def parse_args():
         except Exception:
             pass
 
+    # Приоритет параметров из CLI (командная строка перебивает конфиг)
     if args.vfs: vfs_path = args.vfs
     if args.script: script_path = args.script
 
@@ -275,6 +301,7 @@ def parse_args():
         sys.exit(1)
 
     return vfs_path, script_path
+
 
 if __name__ == "__main__":
     vfs, script = parse_args()
